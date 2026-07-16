@@ -1,5 +1,6 @@
 import argparse
 import csv
+import re
 
 import requests
 from bs4 import BeautifulSoup
@@ -31,6 +32,7 @@ def parse_books(html: str, limit: int) -> list[dict]:
 
         author_tag = item.select_one(".book-item__author")
         rating_tag = item.select_one(".book-item__rating")
+        readers_tag = item.select_one(".icon-added-grey")
 
         title = title_tag.get_text(strip=True)
         author = author_tag.get_text(strip=True) if author_tag else "не указан"
@@ -38,14 +40,20 @@ def parse_books(html: str, limit: int) -> list[dict]:
         rating_text = rating_tag.get_text(strip=True) if rating_tag else None
         rating = rating_text.replace(",", ".") if rating_text else "нет данных"
 
-        # Цена на livelib недоступна без выполнения JS (кнопка "Купить"
-        # подгружает её через отдельный запрос при клике) — честно отмечаем это.
+        # На карточке число округлено ("12K"), точное значение лежит в title
+        # атрибуте ссылки (например: "11950 прочитали") — берём именно его.
+        readers = "нет данных"
+        if readers_tag and readers_tag.get("title"):
+            match = re.search(r"[\d\s]+", readers_tag["title"])
+            if match:
+                readers = match.group().replace(" ", "").strip()
+
         books.append(
             {
                 "название": title,
                 "автор": author,
                 "рейтинг": rating,
-                "цена": "не указана на сайте",
+                "читателей": readers,
                 "источник": "livelib.ru",
             }
         )
