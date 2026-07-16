@@ -1,80 +1,56 @@
 import argparse
 import csv
-import re
-import time
 
 import requests
 from bs4 import BeautifulSoup
 
-# Сайт специально сделан для тренировки парсинга — можно скрейпить без ограничений
-BASE_URL = "http://books.toscrape.com/catalogue/page-{}.html"
+# Livelib.ru — русскоязычный сайт отзывов и рейтингов книг (не магазин).
+# robots.txt сайта разрешает парсинг страниц жанров и книг (проверено 16.07.2026):
+# запрещены только служебные подстраницы (/editions/, /tags/, /search и т.п.),
+# сама страница жанра и карточки книг — разрешены.
+GENRE_URL = "https://www.livelib.ru/genre/%D0%94%D0%B5%D1%82%D0%B5%D0%BA%D1%82%D0%B8%D0%B2%D1%8B/top"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (educational scraper demo)"}
 
-RATING_WORDS = {
-    "One": 1,
-    "Two": 2,
-    "Three": 3,
-    "Four": 4,
-    "Five": 5,
-}
 
-
-def fetch_page(page_number: int) -> str | None:
-    url = BASE_URL.format(page_number)
-    response = requests.get(url, headers=HEADERS, timeout=10)
-
-    if response.status_code == 404:
-        return None
-
+def fetch_page() -> str:
+    response = requests.get(GENRE_URL, headers=HEADERS, timeout=15)
     response.raise_for_status()
     response.encoding = "utf-8"
     return response.text
 
 
-def parse_page(html: str) -> list[dict]:
+def parse_books(html: str, limit: int) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     books = []
 
-    for card in soup.select("article.product_pod"):
-        title = card.h3.a["title"]
+    for item in soup.select(".book-item__item")[:limit]:
+        title_tag = item.select_one(".book-item__title")
+        if not title_tag:
+            continue
 
-        price_text = card.select_one(".price_color").text
-        price = float(re.search(r"[\d.]+", price_text).group())
+        author_tag = item.select_one(".book-item__author")
+        rating_tag = item.select_one(".book-item__rating")
 
-        availability = card.select_one(".availability").text.strip()
+        title = title_tag.get_text(strip=True)
+        author = author_tag.get_text(strip=True) if author_tag else "не указан"
 
-        rating_word = card.select_one("p.star-rating")["class"][1]
-        rating = RATING_WORDS.get(rating_word, 0)
+        rating_text = rating_tag.get_text(strip=True) if rating_tag else None
+        rating = rating_text.replace(",", ".") if rating_text else "нет данных"
 
+        # Цена на livelib недоступна без выполнения JS (кнопка "Купить"
+        # подгружает её через отдельный запрос при клике) — честно отмечаем это.
         books.append(
             {
-                "title": title,
-                "price_gbp": price,
-                "availability": availability,
-                "rating": rating,
+                "название": title,
+                "автор": author,
+                "рейтинг": rating,
+                "цена": "не указана на сайте",
+                "источник": "livelib.ru",
             }
         )
 
     return books
-
-
-def scrape(pages: int) -> list[dict]:
-    all_books = []
-
-    for page_number in range(1, pages + 1):
-        html = fetch_page(page_number)
-        if html is None:
-            print(f"Страница {page_number} не найдена — останавливаюсь.")
-            break
-
-        books = parse_page(html)
-        all_books.extend(books)
-        print(f"Страница {page_number}: собрано {len(books)} книг")
-
-        time.sleep(1)  # вежливая пауза, чтобы не перегружать сайт
-
-    return all_books
 
 
 def save_to_csv(books: list[dict], filename: str) -> None:
@@ -82,7 +58,8 @@ def save_to_csv(books: list[dict], filename: str) -> None:
         print("Нечего сохранять — список пуст.")
         return
 
-    with open(filename, "w", newline="", encoding="utf-8") as f:
+    # utf-8-sig — чтобы кириллица корректно открывалась в Excel на Windows
+    with open(filename, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=books[0].keys())
         writer.writeheader()
         writer.writerows(books)
@@ -90,20 +67,21 @@ def save_to_csv(books: list[dict], filename: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Собирает названия, цены и рейтинги книг с books.toscrape.com"
+        description="Собирает названия, авторов и рейтинги детективов с livelib.ru"
     )
     parser.add_argument(
-        "--pages", type=int, default=5, help="сколько страниц каталога собрать (по умолчанию 5)"
+        "--count", type=int, default=20, help="сколько книг собрать (по умолчанию 20)"
     )
     parser.add_argument(
-        "--output", default="books.csv", help="имя файла для сохранения (по умолчанию books.csv)"
+        "--output", default="detectives.csv", help="имя файла для сохранения (по умолчанию detectives.csv)"
     )
     args = parser.parse_args()
 
-    books = scrape(args.pages)
+    html = fetch_page()
+    books = parse_books(html, args.count)
     save_to_csv(books, args.output)
 
-    print(f"\nГотово! Всего собрано {len(books)} книг. Сохранено в {args.output}")
+    print(f"Готово! Собрано {len(books)} детективов. Сохранено в {args.output}")
 
 
 if __name__ == "__main__":
